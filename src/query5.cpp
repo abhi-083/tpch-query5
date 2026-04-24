@@ -24,14 +24,14 @@ bool parseArgs(int argc, char *argv[], std::string &r_name, std::string &start_d
         return false;
     }
 
-    auto hasValue = [&, argc](int i)
+    auto hasValue = [&](int i)
     {
         return ((i + 1 < argc) && argv[i + 1][0] != '-') ? true : false;
     };
 
-    for (int i{1}; i < argc; ++i)
+    for (int i = 1; i < argc; ++i)
     {
-        std::string arg{argv[i]};
+        std::string arg = argv[i];
         if (arg == "--r_name" && hasValue(i))
         {
             r_name = argv[++i];
@@ -149,8 +149,8 @@ ResultType parallelFilter(const std::vector<std::map<std::string, std::string>> 
         size_t start = i * chunkSize;
         size_t end = (i == num_threads - 1) ? dataSize : start + chunkSize;
 
-        futures.emplace_back(std::async(std::launch::async, [start, end, &table_data, &filter_func]()
-                                        {
+        futures.push_back(std::async(std::launch::async, [start, end, &table_data, &filter_func]()
+                                     {
                                             ResultType local_result;
                                             for (size_t j = start; j < end; ++j) {
                                                 filter_func(table_data[j], local_result);
@@ -161,9 +161,9 @@ ResultType parallelFilter(const std::vector<std::map<std::string, std::string>> 
     for (auto &future : futures)
     {
         auto local_result = future.get();
-        for (const auto &[val1, val2] : local_result)
+        for (const auto &pair : local_result)
         {
-            final_result[val1] += val2;
+            final_result[pair.first] += pair.second;
         }
     }
 
@@ -185,7 +185,7 @@ bool executeQuery5(const std::string &r_name, const std::string &start_date, con
 
     auto filtered_nations = parallelFilter<std::unordered_map<std::string, std::string>>(
         nation_data,
-        [&](const auto &row, auto &result)
+        [&](const std::map<std::string, std::string> &row, std::unordered_map<std::string, std::string> &result)
         {
             if (row.at("n_regionkey") == region_key)
             {
@@ -196,14 +196,14 @@ bool executeQuery5(const std::string &r_name, const std::string &start_date, con
 
     std::unordered_set<std::string> valid_nation_keys;
     valid_nation_keys.reserve(filtered_nations.size());
-    for (const auto &[nation_key, nation_name] : filtered_nations)
+    for (const auto &nation_pair : filtered_nations)
     {
-        valid_nation_keys.insert(nation_key);
+        valid_nation_keys.insert(nation_pair.first);
     }
 
     auto filtered_suppliers = parallelFilter<std::unordered_map<std::string, std::string>>(
         supplier_data,
-        [&](const auto &row, auto &result)
+        [&](const std::map<std::string, std::string> &row, std::unordered_map<std::string, std::string> &result)
         {
             if (valid_nation_keys.count(row.at("s_nationkey")))
             {
@@ -215,33 +215,33 @@ bool executeQuery5(const std::string &r_name, const std::string &start_date, con
     std::unordered_set<std::string> valid_supplier_nation_keys;
     valid_supplier_nation_keys.reserve(filtered_suppliers.size());
 
-    for (const auto &[supplier_key, nation_key] : filtered_suppliers)
+    for (const auto &supplier_pair : filtered_suppliers)
     {
-        valid_supplier_nation_keys.insert(nation_key);
+        valid_supplier_nation_keys.insert(supplier_pair.second);
     }
 
-    auto filtered_customers = parallelFilter<std::unordered_map<std::string, std::string>>(customer_data, [&](const auto &row, auto &result)
+    auto filtered_customers = parallelFilter<std::unordered_map<std::string, std::string>>(customer_data, [&](const std::map<std::string, std::string> &row, std::unordered_map<std::string, std::string> &result)
                                                                                            {
-        if (valid_supplier_nation_keys.count(row.at("c_nationkey"))) {
-            result[row.at("c_custkey")] = row.at("c_nationkey");
-        } }, num_threads);
+            if (valid_supplier_nation_keys.count(row.at("c_nationkey"))) {
+                result[row.at("c_custkey")] = row.at("c_nationkey");
+            } }, num_threads);
 
-    auto filtered_orders = parallelFilter<std::unordered_map<std::string, std::string>>(orders_data, [&](const auto &row, auto &result)
+    auto filtered_orders = parallelFilter<std::unordered_map<std::string, std::string>>(orders_data, [&](const std::map<std::string, std::string> &row, std::unordered_map<std::string, std::string> &result)
                                                                                         {
-        const auto& date = row.at("o_orderdate");
-        if (date >= start_date && date < end_date && 
-            filtered_customers.count(row.at("o_custkey"))) {
-                result[row.at("o_orderkey")] = row.at("o_custkey");
-        } }, num_threads);
+            const std::string& date = row.at("o_orderdate");
+            if (date >= start_date && date < end_date && 
+                filtered_customers.count(row.at("o_custkey"))) {
+                    result[row.at("o_orderkey")] = row.at("o_custkey");
+            } }, num_threads);
 
     results = parallelFilter<std::map<std::string, double>>(
         lineitem_data,
-        [&](const auto &row, auto &result)
+        [&](const std::map<std::string, std::string> &row, std::map<std::string, double> &result)
         {
             if (filtered_suppliers.count(row.at("l_suppkey")) &&
                 filtered_orders.count(row.at("l_orderkey")))
             {
-                auto nation_name = filtered_nations.at(
+                std::string nation_name = filtered_nations.at(
                     filtered_customers.at(filtered_orders.at(row.at("l_orderkey"))));
                 result[nation_name] += std::stod(row.at("l_extendedprice")) *
                                        (1 - std::stod(row.at("l_discount")));
@@ -261,7 +261,7 @@ bool outputResults(const std::string &result_path, const std::map<std::string, d
                   return a.second > b.second;
               });
 
-    auto output_file = result_path + "query5_results" + std::to_string(std::time(nullptr)) + ".tbl";
+    auto output_file = result_path + "query5_results" + std::to_string(std::time(NULL)) + ".tbl";
     std::ofstream ofs(output_file);
 
     if (!ofs.is_open())
